@@ -9,6 +9,8 @@ jobs:
   build-and-test:
     runs-on: macos-15
     timeout-minutes: 30
+    env:
+      DERIVED: ${{ github.workspace }}/build-ci
     steps:
       - uses: actions/checkout@v4
 
@@ -19,11 +21,43 @@ jobs:
 
       # 测试以 CCBar.app 为宿主运行，arm64 上未签名的 App 无法启动，
       # 因此用 ad-hoc 签名（"-"），不需要证书或 Team。
-      - name: 编译并运行单元测试
+      - name: 编译 App 与测试
         run: |
           set -o pipefail
           xcodebuild -project ccbar.xcodeproj -scheme ccbar \
             -configuration Debug -destination 'platform=macOS' \
+            -derivedDataPath "$DERIVED" \
             CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
             CODE_SIGN_IDENTITY="-" \
-            test
+            build-for-testing
+
+      # 诊断：单独启动一次测试宿主，记录签名信息和系统拒绝启动的原因。
+      - name: 诊断测试宿主启动
+        continue-on-error: true
+        run: |
+          APP="$DERIVED/Build/Products/Debug/CCBar.app"
+          sw_vers
+          codesign -dv --verbose=4 "$APP" 2>&1 || true
+          codesign -d --entitlements - "$APP" 2>&1 || true
+          codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 || true
+          spctl --assess --type execute -vv "$APP" 2>&1 || true
+          plutil -p "$APP/Contents/Info.plist" | grep -E "LSMinimumSystemVersion|CFBundleIdentifier|LSUIElement" || true
+          start="$(date '+%Y-%m-%d %H:%M:%S')"
+          open "$APP" 2>&1 || echo "open 返回 $?"
+          sleep 8
+          pgrep -lf "CCBar.app" || echo "CCBar 进程未运行"
+          log show --start "$start" --style compact \
+            --predicate 'eventMessage CONTAINS[c] "ccbar" OR process == "amfid" OR process == "syspolicyd" OR process == "launchservicesd"' \
+            2>/dev/null | tail -n 150
+          pkill -f "CCBar.app" || true
+
+      - name: 运行单元测试
+        timeout-minutes: 10
+        run: |
+          set -o pipefail
+          xcodebuild -project ccbar.xcodeproj -scheme ccbar \
+            -configuration Debug -destination 'platform=macOS' \
+            -derivedDataPath "$DERIVED" \
+            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
+            CODE_SIGN_IDENTITY="-" \
+            test-without-building
