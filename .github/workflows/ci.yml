@@ -8,6 +8,7 @@ on:
 jobs:
   build-and-test:
     runs-on: macos-15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -16,10 +17,13 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      # 测试以 CCBar.app 为宿主运行，arm64 上未签名的 App 无法启动，
+      # 因此用 ad-hoc 签名（"-"），不需要证书或 Team。
       - name: 编译并运行单元测试
         run: |
           set -o pipefail
           xcodebuild -project ccbar.xcodeproj -scheme ccbar \
             -configuration Debug -destination 'platform=macOS' \
-            CODE_SIGN_IDENTITY="" CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
+            CODE_SIGN_IDENTITY="-" "CODE_SIGN_IDENTITY[sdk=macosx*]=-" \
             test
