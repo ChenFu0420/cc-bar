@@ -1,6 +1,7 @@
 name: CI
 
-# 临时验证用：推送 ci/ 分支时编译并跑单元测试；不打包、不发布。
+# 临时验证用：推送 ci/ 分支时跑 ClaudeAuthTests，并打包一份 ad-hoc 签名的测试版 App
+# 作为 Actions artifact 下载；不创建 Release、不生成 appcast。
 on:
   push:
     branches: ['ci/**']
@@ -19,8 +20,7 @@ jobs:
         with:
           xcode-version: latest-stable
 
-      # 测试以 CCBar.app 为宿主运行，arm64 上未签名的 App 无法启动，
-      # 因此用 ad-hoc 签名（"-"），不需要证书或 Team。
+      # 测试以 CCBar.app 为宿主运行，arm64 上未签名的 App 无法启动，因此用 ad-hoc 签名（"-"）。
       - name: 编译 App 与测试
         run: |
           set -o pipefail
@@ -31,28 +31,8 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             build-for-testing
 
-      # 诊断：单独启动一次测试宿主，记录签名信息和系统拒绝启动的原因。
-      - name: 诊断测试宿主启动
-        continue-on-error: true
-        run: |
-          APP="$DERIVED/Build/Products/Debug/CCBar.app"
-          sw_vers
-          codesign -dv --verbose=4 "$APP" 2>&1 || true
-          codesign -d --entitlements - "$APP" 2>&1 || true
-          codesign --verify --deep --strict --verbose=2 "$APP" 2>&1 || true
-          spctl --assess --type execute -vv "$APP" 2>&1 || true
-          plutil -p "$APP/Contents/Info.plist" | grep -E "LSMinimumSystemVersion|CFBundleIdentifier|LSUIElement" || true
-          start="$(date '+%Y-%m-%d %H:%M:%S')"
-          open "$APP" 2>&1 || echo "open 返回 $?"
-          sleep 8
-          pgrep -lf "CCBar.app" || echo "CCBar 进程未运行"
-          log show --start "$start" --style compact \
-            --predicate 'eventMessage CONTAINS[c] "ccbar" OR process == "amfid" OR process == "syspolicyd" OR process == "launchservicesd"' \
-            2>/dev/null | tail -n 150
-          pkill -f "CCBar.app" || true
-
-      # 首次出现的 “Could not launch CCBarTests” 是 LaunchServices 首次尝试失败，
-      # xcodebuild 随后会成功启动宿主并开始测试，可忽略。
+      # 首次出现的 “Could not launch CCBarTests” 是 LaunchServices 首次尝试失败，可忽略。
+      # 完整测试集在 CI 上会在 QuotaAlertTests 附近卡住（与本次修复无关），这里只跑本次修复的回归测试。
       - name: 运行 ClaudeAuthTests
         timeout-minutes: 8
         run: |
@@ -65,16 +45,20 @@ jobs:
             -only-testing:CCBarTests/ClaudeAuthTests \
             test-without-building
 
-      # QuotaAlertTests 在 CI 上会卡住（与本次修复无关，另行排查），这里跳过；仅供参考，不影响结论。
-      - name: 运行其余单元测试（跳过 QuotaAlertTests）
-        timeout-minutes: 10
-        continue-on-error: true
+      # 公钥与 project.pbxproj 中的 SPARKLE_PUBLIC_ED_KEY 相同（公开值，非密钥）。
+      - name: 打包测试版（scripts/build.sh）
+        env:
+          SPARKLE_PUBLIC_ED_KEY: ZBP7TIEjReojbAckWVPq4ShHcG1o9+nAEm4hfsfhj98=
         run: |
-          set -o pipefail
-          xcodebuild -project ccbar.xcodeproj -scheme ccbar \
-            -configuration Debug -destination 'platform=macOS' \
-            -derivedDataPath "$DERIVED" \
-            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
-            CODE_SIGN_IDENTITY="-" \
-            -skip-testing:CCBarTests/QuotaAlertTests \
-            test-without-building
+          ./scripts/build.sh
+          lipo -archs build/Build/Products/Release/CCBar.app/Contents/MacOS/CCBar
+
+      - name: 上传测试版
+        uses: actions/upload-artifact@v4
+        with:
+          name: CCBar-${{ github.sha }}
+          path: |
+            dist/CCBar.dmg
+            dist/CCBar.app.zip
+          retention-days: 7
+          if-no-files-found: error
