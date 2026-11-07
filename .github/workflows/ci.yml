@@ -51,13 +51,20 @@ jobs:
             2>/dev/null | tail -n 150
           pkill -f "CCBar.app" || true
 
+      # 首次出现的 “Could not launch CCBarTests” 是 LaunchServices 首次尝试失败，
+      # xcodebuild 随后会成功启动宿主并开始测试，可忽略。
+      # 单个测试限时 1 分钟（上限 2 分钟）：卡住的测试会被判失败并点名，其余测试继续跑。
       - name: 运行单元测试
-        timeout-minutes: 10
+        timeout-minutes: 20
         run: |
           set -o pipefail
           xcodebuild -project ccbar.xcodeproj -scheme ccbar \
             -configuration Debug -destination 'platform=macOS' \
             -derivedDataPath "$DERIVED" \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES \
+            -default-test-execution-time-allowance 60 \
+            -maximum-test-execution-time-allowance 120 \
             CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
             CODE_SIGN_IDENTITY="-" \
             test-without-building
