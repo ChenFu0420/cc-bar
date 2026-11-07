@@ -25,5 +25,5 @@ jobs:
           xcodebuild -project ccbar.xcodeproj -scheme ccbar \
             -configuration Debug -destination 'platform=macOS' \
             CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="" \
-            CODE_SIGN_IDENTITY="-" "CODE_SIGN_IDENTITY[sdk=macosx*]=-" \
+            CODE_SIGN_IDENTITY="-" \
             test
